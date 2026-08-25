@@ -4,9 +4,9 @@ We rank cryptocurrency perpetual futures by expected next-day relative return an
 ask a narrower question than whether the ranking makes money: does the number of
 features decide whether flexible models beat linear ones? We fit the same four
 models twice, once on eight features and once on 114, holding the rows, the splits
-and the random seeds fixed, and find that the winner changes.
+and the random seeds fixed, and find that the winner changes. The features are the standard cross-sectional families: recent returns, volatility, funding, liquidity and where the price sits in its recent range, measured at one horizon each in the small set and at several in the large.
 
-## The problem
+# Setup
 
 Each day we observe around 500 perpetual futures on Binance. We predict, for each
 one, its next-day return minus the average next-day return across the whole
@@ -16,17 +16,9 @@ with it; that move is far larger than anything specific to an individual contrac
 Removing it leaves the part that might be forecastable, and it makes the resulting
 portfolio market neutral by construction rather than by hedging.
 
-The trade implied by a ranking is to buy the top decile, short the bottom decile and
-hold for a day. Perpetuals suit this better than the funding-carry trade we
-attempted first, since shorting a perpetual requires only margin. There is no borrow
-to locate and no recall risk, so both legs are symmetric in a way that a spot short
-would not be.
+The trade implied by a ranking is to buy the top decile, short the bottom decile and hold for a day. Perpetuals suit this, since a short position is a contract rather than a borrowed asset, so both legs are equally available on every contract in the panel. 
 
-We chose returns as the target after abandoning funding. Funding rank persistence
-from one day to the next is 0.748, so the naive forecast of tomorrow equals today
-already captures nearly all of the cross-sectional signal and no model improves on
-it. Return rank persistence is -0.049, essentially zero, which means any forecast we
-produce is genuinely new information rather than persistence in disguise.
+Return rank persistence from one day to the next is −0.049, essentially zero, so today's ordering tells you nothing about tomorrow's. Any forecast we produce is therefore genuinely new information rather than persistence in disguise.
 
 ## Parametric and non-parametric models
 
@@ -36,13 +28,12 @@ momentum whether the contract is liquid or illiquid, calm or volatile. That is a
 strong assumption, and it is also efficient, since only one number per feature has
 to be estimated.
 
-A tree assumes nothing about the shape. It splits the rows recursively, so the
-statement "momentum matters, but only when liquidity is low" is something it can
-discover rather than something we have to specify. Every path from the root of a
-tree to a leaf is a conjunction of conditions, which is to say an interaction, and
-those come free. The cost is variance: a deep tree fitted to a different sample of
-the same data would look completely different.
-
+A tree assumes nothing about the functional form. It partitions the sample on one
+feature at a time, recursively, so each condition is evaluated only on the subsample
+its parent produced. A leaf reached by three successive conditions therefore holds
+the rows satisfying all three conditions jointly, and its mean outcome doesn't rely on any feature marginally. The cost is
+variance: refitting on a resample of the same data relocates the splits, which is
+why eighty trees are averaged rather than one being used alone.
 We use four models arranged so that each pair differs in exactly one design choice.
 
 |                 | parametric      | non-parametric               |
@@ -52,9 +43,7 @@ We use four models arranged so that each pair differs in exactly one design choi
 
 Left to right isolates whether flexibility helps. Top to bottom isolates
 regularisation, in the sense that ridge penalises large coefficients and extra trees
-randomises where its splits fall. We dropped gradient boosting and a neural network
-after running them, since neither changed the conclusion and neither isolated a
-single design choice.
+randomises where its splits fall.
 
 ## How a tree chooses a split
 
@@ -79,10 +68,9 @@ values, so with 114 features that is roughly seven million evaluations at the ro
 node alone, repeated at every node below. Extra trees draws one threshold per
 feature uniformly between that feature's minimum and maximum at the node, giving 114
 candidates, and keeps the best of those. It still chooses the feature by comparison;
-it simply never asks whether the cut on that feature was the best available one.
+it doesn't asks whether the cut on that feature was the best available one.
 
-Choosing a worse split deliberately sounds perverse and is the reason extra trees
-wins here. An optimised threshold is fitted to the sample it was chosen on,
+Choosing a worse split deliberately sounds counter-intuitive but is done with the intention to minimise variance.  An optimised threshold is fitted to the sample it was chosen on,
 including the noise in that sample, and when the signal is as weak as next-day
 returns most of what the search is minimising against is noise. A randomly drawn
 threshold cannot overfit in that way. Each individual tree is worse, which is to say
@@ -93,10 +81,7 @@ beat plain bagging in low and medium signal-to-noise settings while bagging wins
 when the signal is strong; their conclusion is that forests win on real data because
 real data is noisy.
 
-## Learned parameters, hyperparameters, and what we did not do
-
-It is worth separating three kinds of number, since the distinction decides which
-block of data each one comes from.
+## Parameter tuning
 
 The **learned parameters** are what fitting determines. For the linear models that
 is 114 coefficients; for the trees it is the feature and threshold at every node

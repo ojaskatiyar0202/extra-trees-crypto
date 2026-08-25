@@ -74,6 +74,15 @@ and the split with the lowest cost is kept. Each leaf then predicts the mean of 
 rows that reached it, which follows from the loss rather than being a convention;
 differentiating the same expression with respect to a single constant gives the mean
 as the minimiser.
+```mermaid
+graph TD
+    A["all training rows"] -->|volume change below 3x| B["quieter days"]
+    A -->|volume change above 3x| C["predict -0.34%"]
+    B -->|dollar volume low| D["thin and quiet"]
+    B -->|dollar volume high| E["predict +0.05%"]
+    D -->|funding positive| F["predict +0.42%"]
+    D -->|funding negative| G["predict -0.18%"]
+```
 
 Thresholds are not continuous choices in practice. The cost only changes when the
 threshold crosses a data value, since that is the only way a row moves from one side

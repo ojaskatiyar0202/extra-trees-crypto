@@ -48,6 +48,16 @@ represent the same thing unless the product terms are constructed in advance. Th
 cost is variance: refitting on a resample of the same data relocates the splits,
 which is why an ensemble of many trees is averaged rather than one being used alone.
 
+```mermaid
+graph TD
+    A["all training rows"] -->|volume change below 3x| B["quieter days"]
+    A -->|volume change above 3x| C["predict -0.34%"]
+    B -->|dollar volume low| D["thin and quiet"]
+    B -->|dollar volume high| E["predict +0.05%"]
+    D -->|funding positive| F["predict +0.42%"]
+    D -->|funding negative| G["predict -0.18%"]
+```
+
 We use four models arranged so that each pair differs in exactly one design choice.
 
 |             | parametric | non-parametric            |
@@ -74,15 +84,7 @@ and the split with the lowest cost is kept. Each leaf then predicts the mean of 
 rows that reached it, which follows from the loss rather than being a convention;
 differentiating the same expression with respect to a single constant gives the mean
 as the minimiser.
-```mermaid
-graph TD
-    A["all training rows"] -->|volume change below 3x| B["quieter days"]
-    A -->|volume change above 3x| C["predict -0.34%"]
-    B -->|dollar volume low| D["thin and quiet"]
-    B -->|dollar volume high| E["predict +0.05%"]
-    D -->|funding positive| F["predict +0.42%"]
-    D -->|funding negative| G["predict -0.18%"]
-```
+
 
 Thresholds are not continuous choices in practice. The cost only changes when the
 threshold crosses a data value, since that is the only way a row moves from one side
@@ -112,10 +114,30 @@ real data is noisy.
 
 ## Method
 
-The panel is one row per contract per day, carrying the features described below and
-the demeaned next-day return as the label. Features are computed within contract, so
-a rolling window never reaches back across a symbol boundary, and the frame is
-sorted by contract and then date before anything is calculated.
+Every row is one contract on one day. It carries the features listed below, all
+computed from data available at that day's close, and the outcome we are trying to
+predict, which is that contract's return over the following day.
+
+### Bagging
+
+A single tree grown to any depth is unstable. Change the sample slightly and the
+first split lands on a different feature, and everything below it changes with it.
+The standard remedy is to fit many trees rather than one and average their
+predictions, and we fit 80 per model. Averaging only helps to the extent the trees
+differ, since averaging near-identical predictions changes nothing, so each tree has
+to be made to see the problem slightly differently.
+
+One way to do that is bootstrapping. Each tree is given its own sample of the
+training rows, drawn with replacement and of the same size as the original, which
+means some rows appear twice and around a third do not appear at all. Every tree
+therefore learns from a slightly different version of the data. Random forest works
+this way.
+
+Extra trees does not: all 80 trees see the whole training block, and the difference
+between them comes entirely from the random thresholds described above.
+
+A prediction for a new row is the average of what all 80 trees return for it, and
+that average is what gets ranked.
 
 Both tree models bag 80 trees to a maximum depth of 10 with a minimum of 200 rows
 per leaf, and consider all 114 features at every node. Ridge uses a penalty of 1000

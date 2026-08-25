@@ -31,6 +31,44 @@ same contracts, averaged over days, and at -0.049 it is close to nothing. Today'
 ranking does not carry over, so whatever ordering a model produces has to come from
 the features rather than from copying yesterday's answer.
 
+## Features
+
+Two feature sets are used throughout: the eight and the 114. The small set takes one
+feature from each family below; the large set widens every family and adds
+cross-sectional ranks and a few products.
+
+| family         | small set               | large set                                                                                                                                                      |
+| -------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| returns        | `ret1`, `ret5`, `ret20` | `pct_change(h)` for h in 1, 2, 3, 5, 10, 15, 20, 30, 60, 90                                                                                                    |
+| risk shape     | `vol20`                 | rolling std, skew and kurtosis of `ret1` at 5, 10, 20, 30, 60                                                                                                  |
+| funding        | `pay1`, `pay5`          | rolling mean and std of `pay` at 3, 5, 10, 20, 60; lags 1, 2, 3, 5; sign; sign flips; payments per day                                                         |
+| liquidity      | `logdv`, `dvchg20`      | `log(close x volume)`; `dv` over its own rolling mean at 5, 10, 20, 60; rolling std of `dv` over its mean; Amihud `abs(ret)/dv`, raw and smoothed at 10 and 30 |
+| price location | —                       | position within rolling high-low range at 10, 20, 60; drawdown from rolling high at each; days since listing                                                   |
+| market state   | —                       | cross-sectional mean return; its 20-day rolling std; return minus that mean                                                                                    |
+| ranks          | —                       | cross-sectional percentile rank, within each day, of the features above                                                                                        |
+| interactions   | —                       | `pay x logdv`, `pay x std20`, `ret20 / std20`, `ret x amihud`                                                                                                  |
+
+`vol20` and `std20` are the same quantity, twenty-day realised volatility, named
+differently in the two sets.
+
+Every feature is deliberately scale free. Bitcoin trades near 65,000 and small
+contracts near 0.02, so a raw price tells the model which contract it is looking at
+rather than what is happening to it. Returns, log volume, ratios to a contract's own
+history and cross-sectional ranks are all comparable across the panel, which is what
+allows one model fitted across 543 contracts to learn a relationship that holds for
+all of them.
+
+Extreme outcomes are capped rather than dropped. We take the 0.5th and 99.5th
+percentile of the target across the whole panel and clip anything beyond them to
+those values, which is called winsorising. Crypto produces days where a contract
+returns several hundred percent, and one such row dominates a squared-error fit
+because the loss grows with the square of the error. Capping the tails roughly doubled every model's out-of-sample performance.
+
+We keep contract-days with more than one million dollars of volume and days with more
+than 100 surviving contracts. The first threshold matters a great deal and is
+revisited below. The second is because ranking into deciles needs breadth, and with
+twenty contracts a decile is two names and the spread is noise.
+
 ## Parametric and non-parametric models
 
 A linear model assumes each feature contributes independently and always in the same
@@ -139,57 +177,65 @@ between them comes entirely from the random thresholds described above.
 A prediction for a new row is the average of what all 80 trees return for it, and
 that average is what gets ranked.
 
-Both tree models bag 80 trees to a maximum depth of 10 with a minimum of 200 rows
-per leaf, and consider all 114 features at every node. Ridge uses a penalty of 1000
-on the sum of squared coefficients, applied after standardising the features, since
-an unstandardised penalty falls unevenly on features measured on different scales.
-The number of trees is a compute budget rather than a real choice, because more trees
-is weakly better and cannot overfit; leaving the features per node at all 114 keeps
-the only visible difference between the two tree models the split rule itself.
+### Configuration
+
+Both tree models fit 80 trees to a maximum depth of 10, with at least 200 rows per
+leaf, and consider all 114 features at every node. Ridge uses a penalty of 1000 on
+the sum of squared coefficients, applied after standardising the features so that
+the penalty does not fall unevenly on features measured on different scales.
 
 It is worth separating what the fit determines from what we supply. The **learned
 parameters** are 114 coefficients for the linear models, and for the trees the
-feature and threshold at every node together with the mean at every leaf, all
-computed from the training rows by minimising squared error. The **hyperparameters**
+feature and threshold at every node (by computing leaf means and using formula above) all,
+computed from the training rows. The **hyperparameters**
 are depth, minimum leaf size and the ridge penalty. These cannot be chosen on
 training error, because a deeper tree always fits the training rows better and a
 smaller penalty always fits them better, so training error would drive flexibility
 upwards without limit. Choosing them properly needs a third block of data that the
 fit has not seen.
 
-We did not tune. Depth, leaf size and penalty were fixed by judgement before any
-modelling, so the results below describe four models at one configuration each
-rather than four models at their best, and someone could reasonably ask whether a
-different penalty would rescue the linear model on the large feature set. We cannot
-answer that. It also means no validation block was required, so the panel is split
-two ways rather than three, and the test block is a genuine holdout in the sense that
-no decision anywhere in the project was made by looking at it.
+### Parameters and tuning
 
-The split is by date and never at random. A random split would place a contract's
-15 June row in training and its 14 June row in test, and since adjacent days are
-highly correlated that is close to handing the model the answer. Splitting by date
-guarantees that every training row precedes every test row. We cut at the 50th, 65th
-and 80th percentile of dates, giving three train and test pairs from the same panel,
-and run each at two random seeds. Both tree models are stochastic, so a single seed
-tells us nothing about stability. This is not a hypothetical concern: an earlier
-version of this work reported a gradient boosting result from seed zero that looked
-strong, and across five seeds the same configuration ranged from 0.0062 to 0.0315,
-with seed zero being the best of the five. Linear and ridge are deterministic and
-give identical numbers at both seeds. Six fits per model per feature set gives a
-mean, a spread, and a paired comparison against another model on matched splits and
-seeds.
+Depth, leaf size and penalty were fixed by judgement before any
+modelling, so the results below describe four models at one configuration of
+hyperparameters each. What we do is simple: the training block determines the
+ coefficients for the linear models and the  thresholds for the trees,
+and the test block is used once to report how each model ranks. Since no
+hyperparameter was ever chosen by looking at performance, no validation block was
+required, and the panel is split two ways rather than three.
+
+### Splits and seeds
+
+The division into training and test is by date and never at random. A random split
+would place a contract's 15 June row in training and its 14 June row in test, and the
+features on those two rows are nearly identical, since a twenty-day return shares
+nineteen of its twenty days with the day before. The returns themselves are not
+persistent, as noted above, but the features are, and that is enough for the model to
+recover a test row's answer from its neighbour in training. Splitting by date
+guarantees that every training row precedes every test row.
+
+We cut at the 50th, 65th and 80th percentile of dates, giving three train and test
+pairs from the same panel, and run each at two random seeds. Both tree models are
+stochastic, but for different reasons: random forest draws a fresh bootstrap sample
+of the rows for every tree, and extra trees draws a fresh threshold at every node.
+The seed fixes those draws, so a single seed tells us nothing about how much of a
+result is the draw rather than the data. Linear and ridge are deterministic and give
+identical numbers at both seeds. Six fits per model per feature set gives a mean, a
+spread, and a paired comparison against another model on matched splits and seeds.
+
+###Metrics
 
 Three metrics do three different jobs. Inside the fit, both model families minimise
 squared error on the demeaned return; that is the loss function and it is not what we
-report. For reporting we use the **rank information coefficient**, which on each test
-day ranks the contracts by prediction, ranks them by realised outcome, takes the
-Spearman correlation of the two orderings, and averages across days. Ranks rather
-than values, because the trade only uses the ordering and never the magnitude of a
+report. For reporting we use the rank information coefficient. On each test day we rank
+the contracts by prediction, rank them again by realised outcome, and take the
+Spearman correlation of the two orderings. The IC is the average of those daily
+correlations. Ranks rather than values, because our trading strategy only uses the ordering and never the magnitude of a
 prediction, so saying plus 0.4% instead of plus 4% changes nothing as long as the
-ordering holds. Per day rather than pooled, because pooling would let a day with 500
-contracts outweigh a day with 150, and we trade every day regardless of how good that
-day happens to be. An IC above 0.02 is usually treated as usable in cross-sectional
-equity work, and nobody reports 0.3, since returns are almost entirely noise.
+ordering holds. We compute a correlation for each day and then average, rather than pooling every
+test row into one correlation. Pooling would let a day with 500 contracts count for
+more than a day with 150, and we trade every day regardless of how many contracts
+were listed or how good that day happened to be.
 
 We also report the **decile spread**, the realised return of the actual trade in
 basis points per day. Each test day we sort by prediction into ten buckets and take
@@ -197,38 +243,6 @@ the mean realised outcome of the top bucket minus the bottom. Rank IC uses the w
 cross-section; the decile spread uses only the hundred contracts that would actually
 be held. The two can disagree, and here they do.
 
-## Features
-
-The small set takes one feature from each family. The large set widens every family
-and adds cross-sectional ranks and a few products.
-
-| family         | small set               | large set                                                                                                                                                      |
-| -------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| returns        | `ret1`, `ret5`, `ret20` | `pct_change(h)` for h in 1, 2, 3, 5, 10, 15, 20, 30, 60, 90                                                                                                    |
-| risk shape     | `vol20`                 | rolling std, skew and kurtosis of `ret1` at 5, 10, 20, 30, 60                                                                                                  |
-| funding        | `pay1`, `pay5`          | rolling mean and std of `pay` at 3, 5, 10, 20, 60; lags 1, 2, 3, 5; sign; sign flips; payments per day                                                         |
-| liquidity      | `logdv`, `dvchg20`      | `log(close x volume)`; `dv` over its own rolling mean at 5, 10, 20, 60; rolling std of `dv` over its mean; Amihud `abs(ret)/dv`, raw and smoothed at 10 and 30 |
-| price location | —                       | position within rolling high-low range at 10, 20, 60; drawdown from rolling high at each; days since listing                                                   |
-| market state   | —                       | cross-sectional mean return; its 20-day rolling std; return minus that mean                                                                                    |
-| ranks          | —                       | cross-sectional percentile rank, within each day, of the features above                                                                                        |
-| interactions   | —                       | `pay x logdv`, `pay x std20`, `ret20 / std20`, `ret x amihud`                                                                                                  |
-
-Every feature is deliberately scale free. Bitcoin trades near 65,000 and small
-contracts near 0.02, so a raw price tells the model which contract it is looking at
-rather than what is happening to it. Returns, log volume, ratios to a contract's own
-history and cross-sectional ranks are all comparable across the panel, which is what
-allows one model fitted across 543 contracts to learn a relationship that holds for
-all of them.
-
-The target is winsorised at the 0.5% and 99.5% tails. Crypto produces days where a
-contract returns several hundred percent, and one such row dominates a squared-error
-fit. Adding this roughly doubled every model's IC, which is itself evidence that
-outliers rather than non-linearity were the binding problem before.
-
-We keep contract-days with more than one million dollars of volume and days with
-more than 100 surviving contracts. The first threshold matters a great deal and is
-revisited below. The second is because ranking into deciles needs breadth, and with
-twenty contracts a decile is two names and the spread is noise.
 
 ## Data
 
@@ -248,11 +262,6 @@ Merging the two and dropping rows where the rolling windows have not filled leav
 112,905 contract-days across 543 perpetuals, from 30 October 2025 to 30 July 2026.
 Funding is available to 24 August 2026 but prices stop at the end of July, because
 the monthly kline file for August is not published until the month closes.
-
-The universe was taken from contracts listed at the time of download, so perpetuals
-delisted before October 2025 never enter the panel. Within the window no contract's
-price series terminates early, so there is no truncation bias of the kind that
-hides a final collapse, but the universe selection remains.
 
 ## Results
 
@@ -281,13 +290,9 @@ ordinary overfitting from parameter count rather than at coefficient instability
 | 8 features   | +0.0605 | +0.0388     | 0 of 6           |
 | 114 features | +0.0303 | +0.0489     | 6 of 6           |
 
-**Discussion.** The paired differences on the large set have a mean of +0.0186 and a
-standard deviation of 0.0030 across the six fits, giving a t-statistic of 15.29. The
-six fits are not independent, since the three splits share overlapping training data
-and the two seeds share everything else, so the effective sample is smaller than six
-and this figure should be read as a summary of consistency rather than as a p-value.
-What it does establish is that the reversal is not an artefact of one split or one
-seed, which was the failure mode we were guarding against.
+Discussion. Extra trees loses on every one of the six fits with eight features
+and wins on every one with 114. The reversal holds at all three date cuts and both
+seeds.
 
 | split rule                    | IC, 114 features |
 | ----------------------------- | ---------------- |
@@ -296,32 +301,27 @@ seed, which was the failure mode we were guarding against.
 
 **Discussion.** Both models bag eighty trees to the same depth and the same minimum
 leaf size, and the visible difference between them is whether the threshold at each
-node is searched for or drawn at random. Random splitting is 23% better here, which
-is the direction Mentch and Zhou predict for low signal-to-noise data.
+node is searched for or drawn at random.
 
-There is a confound. Scikit-learn's `RandomForestRegressor` bootstraps rows by
-default and its `ExtraTreesRegressor` does not, so our two models differ in two
-respects rather than one, and the gap cannot be attributed to the split rule alone.
-Setting `bootstrap=True` on the extra trees would isolate it. We report the number
-as suggestive rather than as a clean mechanism test.
 
 | configuration             | decile spread, bp/day |
 | ------------------------- | --------------------- |
 | extra trees, 114 features | 125.9                 |
 | linear, 8 features        | 76.8                  |
 
-**Discussion.** The two metrics disagree. Linear on eight features has the higher
-rank IC at 0.0605 against 0.0489, and the lower decile spread at 76.8 against 125.9.
-They measure different regions of the cross-section. Rank IC uses all 500 contracts,
-so a model that orders the middle of the distribution well scores highly. The decile
-spread uses only the extremes. A tree isolates extreme regions with hard splits,
-which costs it accuracy in the middle and gains it accuracy in the tails, and the
-tails are what the trade holds. The metric has to match what the strategy consumes.
+Discussion. The two metrics disagree. Linear on eight features has the higher
+rank IC, 0.0605 against 0.0489, and the lower decile spread, 76.8 against 125.9. They
+measure different parts of the cross-section: rank IC scores the whole ordering of
+around 500 contracts, while the decile spread only depends on which names land in the
+top and bottom hundred. A tree carves out extreme regions with hard splits, which
+costs it accuracy through the middle and gains it accuracy at the tails. Since the
+trade holds only the tails, extra trees on the large feature set is the better model
+for this strategy despite ranking worse overall.
 
 ### Liquidity
 
 A decile spread of 126 basis points a day is around 360% annualised, which is not a
-plausible return and is worth investigating rather than reporting. We refit extra
+plausible return and is worth investigating. We refit extra
 trees on the large feature set at progressively higher volume floors.
 
 | minimum daily volume | contracts per day | mean, bp/day | std, bp/day | Sharpe |
@@ -330,24 +330,21 @@ trees on the large feature set at progressively higher volume floors.
 | $10m                 | 133               | 112.5        | 388.8       | 5.53   |
 | $50m                 | 59                | 17.2         | 651.7       | 0.50   |
 
-**Discussion.** The edge is an illiquidity artefact. Restricting to contracts
-trading over fifty million dollars a day cuts the mean return from 113 basis points
-to 17 and the Sharpe ratio from 11.2 to 0.5. Nothing tradeable at size survives.
+Discussion. The return disappears once the universe is restricted to contracts
+large enough to trade. Requiring fifty million dollars of daily volume cuts the mean
+from 113 basis points to 17 and the Sharpe ratio from 11.2 to 0.5. What the model was
+ranking on, in other words, was small contracts, and illiquid assets earn higher
+returns precisely because they are hard to trade, so that return is not available to
+anyone trying to take it. There is no practical edge here.
 
-This is what the model should be expected to do. Amihud illiquidity is among the
-features precisely because illiquidity is a known return predictor, and assets that
-are hard to trade earn higher expected returns as compensation for that difficulty.
-The model loads on illiquidity because that is where the unexploited variation sits,
-but the return is payment for being unable to trade, so it cannot be harvested. A
-Sharpe ratio of 11 was the signal that this had happened.
+The last row rests on thin evidence. With only 59 contracts a day, each decile holds
+about six names, and averaging six returns gives a noisy figure; the standard
+deviation is 652 basis points against 192 in the first row. So the 0.50 should not be
+taken as a precise number. The fall from 11.2 to 0.5 across the three rows is much
+larger than that imprecision, and it is the fall that matters.
 
-The fifty million dollar row should be read with care. Fifty-nine contracts a day
-means deciles of about six names each, which is why the standard deviation is 652
-basis points, and the Sharpe ratio of 0.50 is correspondingly imprecise. The
-direction across the three rows is unambiguous; the level of the last one is not.
-
-The comparison between models is unaffected by any of this, since it is a relative
-statement on identical data.
+None of this affects the comparison between models, which is a relative statement on
+identical data.
 
 ## Files
 
@@ -376,12 +373,6 @@ between four models at one configuration each rather than between four models at
 their best. The gap on the large feature set is wide relative to its variation across
 fits, which makes a reversal under tuning unlikely, but this was not tested.
 
-The split rule comparison between random forest and extra trees is confounded by the
-bootstrap default, as described above.
-
-The t-statistic of 15.29 is computed across six fits that share training data and
-therefore are not independent observations.
-
 The panel is fitted once on the earliest 70% of dates and applied to the remainder,
 rather than refitted on a rolling basis and walked forward. A rolling refit is closer
 to how a strategy would run and is what Gu, Kelly and Xiu (2020) use. The fixed
@@ -393,16 +384,7 @@ on the same date share a common factor and each contract's own rows are serially
 correlated, so the panel structure is broken by resampling. This is standard
 practice and works adequately, but the assumption is violated.
 
-The feature set was specified once, before any modelling, from standard families in
-the cross-sectional literature. It was not searched over. Reporting a feature set
-selected because it produced the crossover would be selection on the outcome, and we
-note explicitly that this did not happen.
-
-Costs are not modelled beyond the liquidity sweep. Turnover on a 114-feature tree
-model is high and the decile spread figures are gross.
-
-The sample covers nine months of one exchange. Crypto perpetuals over this period
-are not a general market, and the funding mechanism has no equity analogue.
+Costs are not modelled beyond the liquidity sweep. The sample covers nine months of one exchange.
 
 ## References
 

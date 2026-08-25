@@ -1,4 +1,4 @@
-# Feature dimensionality and the value of non-parametric methods in cross-sectional crypto returns
+# The value of non-parametric ML methods in cross-sectional crypto returns
 
 We rank cryptocurrency perpetual futures by expected next-day relative return and
 ask a narrower question than whether the ranking makes money: does the number of

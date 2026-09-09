@@ -152,7 +152,7 @@ real data is noisy.
 
 ## Method
 
-Every row is one contract on one day. It carries the features listed below, all
+Every row is one contract on one day. It carries the features outlined before, all
 computed from data available at that day's close, and the outcome we are trying to
 predict, which is that contract's return over the following day.
 

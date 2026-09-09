@@ -223,7 +223,7 @@ result is the draw rather than the data. Linear and ridge are deterministic and 
 identical numbers at both seeds. Six fits per model per feature set gives a mean, a
 spread, and a paired comparison against another model on matched splits and seeds.
 
-###Metrics
+### Metrics
 
 Three metrics do three different jobs. Inside the fit, both model families minimise
 squared error on the demeaned return; that is the loss function and it is not what we

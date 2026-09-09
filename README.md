@@ -96,6 +96,8 @@ graph TD
     D -->|funding negative| G["predict -0.18%"]
 ```
 
+*Schematic. Each leaf shows the mean demeaned next-day return of the training rows reaching it, so a positive value is expected outperformance of the cross-section rather than a positive return. Fitted trees reach depth 10 with at least 200 rows per leaf; the values here are illustrative.*
+
 We use four models arranged so that each pair differs in exactly one design choice.
 
 |             | parametric | non-parametric            |
